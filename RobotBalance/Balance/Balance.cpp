@@ -21,7 +21,7 @@ int Balance::UpdatePID(int sensorVal) { //time is in millis, need to change so i
   int ellapsedTime = int(timeInstance - previousTime);   //(change of time)
   int errorChange = error - previousError;          //(change in error)
   //proportional term
-  outVal += pVal * error;
+  outVal = pVal * error;
   //integral term
   errorSum += ellapsedTime * error;
   outVal += errorSum * iVal;
