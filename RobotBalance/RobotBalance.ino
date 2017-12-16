@@ -1,15 +1,30 @@
 #include <Balance.h>
-//cmo
-//test
-// Micah 11-7-17
-  int Value = 0;
+#define INITIAL_P 1
+#define INITIAL_I 1
+#define INITIAL_D 1
+#define INITIAL_DESIRED_ANGLE 0
+#define UPDATE_PERIOD 100
+Balance Control(INITIAL_P,INITIAL_I,INITIAL_D,INITIAL_DESIRED_ANGLE);
+Sensor SensorBalance(UPDATE_PERIOD);
+int initialFrame[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+//16 initial frame positions
+
 void setup() {
+  //initialize motors
+  Control.ServosInitialize();
+  //SetFrame
+  Control.SetFrame(initialFrame);
+  //initialize sensor
+  SensorBalance.Connect();
 }
 
-  Balance control(1,1,1,0);
 void loop() {
-  control.UpdatePID(Value);
+  //setFrame (optional for now)
+  //Control.SetFrame(intialFrame);
+  //check sensor
+  SensorBalance.Update();
+  //calculate wheel SetSpeeds //set wheelspeed
+  int wheelSpeed = Control.UpdatePID(SensorBalance.GetPitchAngle());
+  //set wheelspeed
+  Control.SetSpeeds(wheelSpeed, -wheelSpeed);
 }
-
-// This is a fork edit
-// Hello this is a test branch!
