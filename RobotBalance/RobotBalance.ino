@@ -1,24 +1,19 @@
-
-
 /*
 Describe wiring layout here
 */
-#include <Balance.h>
-#include "I2Cdev.h"   //for MPU6050 library
-#include "MPU6050_6Axis_MotionApps20.h"
 
 //------------------------------------------------------------------------------
 //         settings
 //------------------------------------------------------------------------------
-#define INITIAL_P 1
-#define INITIAL_I 1
-#define INITIAL_D 1
-#define INITIAL_DESIRED_ANGLE 0
+#define INITIAL_P 0.1
+#define INITIAL_I 0
+#define INITIAL_D 0
+#define INITIAL_DESIRED_ANGLE 40
 #define UPDATE_PERIOD 100
-//#define SERIAL_ENABLE             //comment this out to disable serial
+#define SERIAL_ENABLE 1            //comment this out to disable serial
 //for MPU6050
 #define INTERRUPT_PIN 2  // use pin 2 on arbotixM
-#define LED_PIN 13 //blonks when interrupt, from example
+#define LED_PIN 0 //blinks when interrupt, from example
 //obtained through IMU_0.ino
 #define X_GYRO_OFFSET 220
 #define Y_GYRO_OFFSET 76
@@ -28,9 +23,21 @@ Describe wiring layout here
 #define Z_ACCEL_OFFSET 1788
 //------------------------------------------------------------------------------
 
+#include <Balance.h>
+//https://github.com/jrowberg/i2cdevlib/tree/master/Arduino
+#include "I2Cdev.h"   //for MPU6050 library
+#include "MPU6050_6Axis_MotionApps20.h"
+
+// Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
+// is used in I2Cdev.h
+#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
+    #include "Wire.h"
+#endif
+#define OUTPUT_READABLE_YAWPITCHROLL
+
 //variables used for MPU6050
 //interupts
-volatile bool mpuInterrupt; // indicates whether MPU interrupt pin has gone high
+volatile bool mpuInterrupt = false; // indicates whether MPU interrupt pin has gone high
 void dmpDataReady();      //function that runs when MPU6050 interrupts code
 //variables for MPU
 MPU6050 mpu;            //class that represents sensor
@@ -62,22 +69,26 @@ int initialFrame[2][NUMBER_OF_SERVOS] =
   {1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14 ,15,16}  //Servo ID Numbers
 };
 
+int torque = 0;
+int convertedTorque = 0;
+
+
+//object definitions
 Balance Control(INITIAL_P,INITIAL_I,INITIAL_D,INITIAL_DESIRED_ANGLE);
 ServoGroup Robot(initialFrame);
 
+//called when MPU6050 triggers INTERRUPT_PIN
 void dmpDataReady()
 {
   mpuInterrupt = true;
 };
 
 void setup() {
-  //initialize motors and sets frame
   Robot.ServosInitialize();
 
   //initialize sensor---------------------------------------------------------
   blinkState = false;
   dmpReady = false;
-  mpuInterrupt = false;
   //initial setup
   // join I2C bus (I2Cdev library doesn't do this automatically)
   #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
@@ -86,25 +97,16 @@ void setup() {
   #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
   Fastwire::setup(400, true);
   #endif
-
   #ifdef SERIAL_ENABLE
   Serial.begin(115200);
-  while (!Serial); // wait for Leonardo enumeration, others continue immediately
-  // initialize device
   Serial.println(F("Initializing I2C devices..."));
   #endif
-
   mpu.initialize();
   pinMode(INTERRUPT_PIN, INPUT);
   // verify connection
   #ifdef SERIAL_ENABLE
   Serial.println(F("Testing device connections..."));
   Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
-  // wait for ready
-  Serial.println(F("\nSend any character to begin DMP programming and demo: "));
-  while (Serial.available() && Serial.read()); // empty buffer
-  while (!Serial.available());                 // wait for data
-  while (Serial.available() && Serial.read()); // empty buffer again
   // load and configure the DMP
   Serial.println(F("Initializing DMP..."));
   #endif
@@ -127,7 +129,7 @@ void setup() {
     #ifdef SERIAL_ENABLE
     Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
     #endif
-    //attachInterrupt(INTERRUPT_PIN, dmpDataReady, RISING);
+    attachInterrupt(INTERRUPT_PIN, dmpDataReady, RISING);
     mpuIntStatus = mpu.getIntStatus();
     // set our DMP Ready flag so the main loop() function knows it's okay to use it
     #ifdef SERIAL_ENABLE
@@ -198,27 +200,35 @@ void loop() {
         mpu.dmpGetQuaternion(&q, fifoBuffer);
         mpu.dmpGetGravity(&gravity, &q);
         mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-        pitch = ypr[1];
+        pitch = ypr[1]*180/M_PI;
         //only compiles if SERIAL_LOGGING is defined above
         #ifdef SERIAL_ENABLE
-        Serial.print("pitch andgle\t");
-        Serial.println(pitch);
+        Serial.print(pitch);
+        Serial.print("\t");
+        Serial.print(INITIAL_DESIRED_ANGLE);
+        Serial.print("\t");
+        Serial.println(convertedTorque);
         #endif
         // blink LED to indicate activity
         blinkState = !blinkState;
         digitalWrite(LED_PIN, blinkState);
+
+
+
+        //----------------------------------------------------------------------------
+        //    calculate PID
+        //----------------------------------------------------------------------------
+        //get torque from PID loop and constrain from zero to max
+        torque = constrain(Control.UpdatePID(pitch), -MAX_TORQUE, MAX_TORQUE);
+        
+        //----------------------------------------------------------------------------
+        //    Set Output
+        //----------------------------------------------------------------------------
+        //maps torque because torque is set from 0 to 1023
+        convertedTorque = map(torque, 0, MAX_TORQUE, 0, 1023);
+        Robot.SetSpeeds(convertedTorque,-convertedTorque);
+
       }
     }
   }
-
-  //----------------------------------------------------------------------------
-  //    calculate PID
-  //----------------------------------------------------------------------------
-  int torque = 0;
-  torque = Control.UpdatePID(pitch);
-
-  //----------------------------------------------------------------------------
-  //    Set Torque
-  //----------------------------------------------------------------------------
-
 }
