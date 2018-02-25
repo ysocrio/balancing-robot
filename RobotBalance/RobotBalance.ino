@@ -1,19 +1,27 @@
 /*
-Describe wiring layout here
+  Describe wiring layout here
 */
+
+/*
+   Note changed quaternian definitions in MPU6050_6Axis_MotionApps20 because MPU was not mounted in the represented orientation
+*/
+
+int speedval = 0;
 
 //------------------------------------------------------------------------------
 //         settings
 //------------------------------------------------------------------------------
-#define INITIAL_P 0.1
+#define INITIAL_P 100
 #define INITIAL_I 0
 #define INITIAL_D 0
 #define INITIAL_DESIRED_ANGLE 40
 #define UPDATE_PERIOD 100
 #define SERIAL_ENABLE 1            //comment this out to disable serial
+
 //for MPU6050
 #define INTERRUPT_PIN 2  // use pin 2 on arbotixM
 #define LED_PIN 0 //blinks when interrupt, from example
+
 //obtained through IMU_0.ino
 #define X_GYRO_OFFSET 220
 #define Y_GYRO_OFFSET 76
@@ -31,7 +39,7 @@ Describe wiring layout here
 // Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
 // is used in I2Cdev.h
 #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-    #include "Wire.h"
+#include "Wire.h"
 #endif
 #define OUTPUT_READABLE_YAWPITCHROLL
 
@@ -49,7 +57,10 @@ uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
 uint8_t devStatus;      // return status after each device operation (0 = success, !0 = error)
 uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
 uint16_t fifoCount;     // count of all bytes currently in FIFO
-uint8_t fifoBuffer[64]; // FIFO storage buffer
+
+//arduino restarting due to not enough ram? this uses a quarter of ram, lets shrink this
+//potential solution: chang DMP output rate, then fifoBuffer size in arduino
+uint8_t fifoBuffer[1024]; // FIFO storage buffer
 //containers for MPU6050
 Quaternion q;           // [w, x, y, z]         quaternion container
 VectorInt16 aa;         // [x, y, z]            accel sensor measurements
@@ -65,8 +76,8 @@ float pitch = INITIAL_DESIRED_ANGLE;
 //14 initial frame positions last two are ignored
 int initialFrame[2][NUMBER_OF_SERVOS] =
 {
-  {512,512,205,818,512,512,512,512,512,512,512,808,512,512,00,00}, //angles
-  {1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14 ,15,16}  //Servo ID Numbers
+  {512, 512, 205, 818, 512, 512, 512, 512, 512, 512, 512, 808, 512, 512, 00, 00}, //angles
+  {1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 18 , 15, 16} //Servo ID Numbers
 };
 
 int torque = 0;
@@ -74,7 +85,7 @@ int convertedTorque = 0;
 
 
 //object definitions
-Balance Control(INITIAL_P,INITIAL_I,INITIAL_D,INITIAL_DESIRED_ANGLE);
+Balance Control(INITIAL_P, INITIAL_I, INITIAL_D, INITIAL_DESIRED_ANGLE);
 ServoGroup Robot(initialFrame);
 
 //called when MPU6050 triggers INTERRUPT_PIN
@@ -91,50 +102,59 @@ void setup() {
   dmpReady = false;
   //initial setup
   // join I2C bus (I2Cdev library doesn't do this automatically)
-  #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
+#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
   Wire.begin();
   Wire.setClock(400000); // 400kHz I2C clock. Comment this line if having compilation difficulties
-  #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
+#elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
   Fastwire::setup(400, true);
-  #endif
-  #ifdef SERIAL_ENABLE
+#endif
+#ifdef SERIAL_ENABLE
   Serial.begin(115200);
   Serial.println(F("Initializing I2C devices..."));
-  #endif
+#endif
   mpu.initialize();
   pinMode(INTERRUPT_PIN, INPUT);
   // verify connection
-  #ifdef SERIAL_ENABLE
+#ifdef SERIAL_ENABLE
   Serial.println(F("Testing device connections..."));
   Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
   // load and configure the DMP
   Serial.println(F("Initializing DMP..."));
-  #endif
+#endif
   devStatus = mpu.dmpInitialize();
+
   // supply your own gyro offsets here, scaled for min sensitivity
-  mpu.setXGyroOffset(X_GYRO_OFFSET);
-  mpu.setYGyroOffset(Y_GYRO_OFFSET);
-  mpu.setZGyroOffset(Z_GYRO_OFFSET);
-  mpu.setXAccelOffset(X_ACCEL_OFFSET); // 1688 factory default for my test chip
-  mpu.setYAccelOffset(Y_ACCEL_OFFSET); // 1688 factory default for my test chip
-  mpu.setZAccelOffset(Z_ACCEL_OFFSET); // 1688 factory default for my test chip
+  mpu.setXGyroOffset(220);
+  mpu.setYGyroOffset(76);
+  mpu.setZGyroOffset(-85);
+  mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
+
+  /*
+    // supply your own gyro offsets here, scaled for min sensitivity
+    mpu.setXGyroOffset(X_GYRO_OFFSET);
+    mpu.setYGyroOffset(Y_GYRO_OFFSET);
+    mpu.setZGyroOffset(Z_GYRO_OFFSET);
+    mpu.setXAccelOffset(X_ACCEL_OFFSET); // 1688 factory default for my test chip
+    mpu.setYAccelOffset(Y_ACCEL_OFFSET); // 1688 factory default for my test chip
+    mpu.setZAccelOffset(Z_ACCEL_OFFSET); // 1688 factory default for my test chip
+  */
   // make sure it worked (returns 0 if so)
   if (devStatus == 0) {
     // turn on the DMP, now that it's ready
-    #ifdef SERIAL_ENABLE
+#ifdef SERIAL_ENABLE
     Serial.println(F("Enabling DMP..."));
-    #endif
+#endif
     mpu.setDMPEnabled(true);
     // enable Arduino interrupt detection
-    #ifdef SERIAL_ENABLE
+#ifdef SERIAL_ENABLE
     Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
-    #endif
+#endif
     attachInterrupt(INTERRUPT_PIN, dmpDataReady, RISING);
     mpuIntStatus = mpu.getIntStatus();
     // set our DMP Ready flag so the main loop() function knows it's okay to use it
-    #ifdef SERIAL_ENABLE
+#ifdef SERIAL_ENABLE
     Serial.println(F("DMP ready! Waiting for first interrupt..."));
-    #endif
+#endif
     dmpReady = true;
     // get expected DMP packet size for later comparison
     packetSize = mpu.dmpGetFIFOPacketSize();
@@ -143,11 +163,11 @@ void setup() {
     // 1 = initial memory load failed
     // 2 = DMP configuration updates failed
     // (if it's going to break, usually the code will be 1)
-    #ifdef SERIAL_ENABLE
+#ifdef SERIAL_ENABLE
     Serial.print(F("DMP Initialization failed (code "));
     Serial.print(devStatus);
     Serial.println(F(")"));
-    #endif
+#endif
   }
   // configure LED for output
   pinMode(LED_PIN, OUTPUT);
@@ -155,7 +175,7 @@ void setup() {
 
 //------------------------------------------------------------------------------
 // balancing starts here
-//------------------------------------------------------------------------------
+//--------------------------------------------------------------
 
 void loop() {
   //first set the robots frame
@@ -165,10 +185,10 @@ void loop() {
   //            Read Sensor data
   //----------------------------------------------------------------------------
   // if programming failed, don't try to do anything
-  if (dmpReady){
+  if (dmpReady) {
     // wait for MPU interrupt or extra packet(s) available
-    bool MPUeady = !(!mpuInterrupt && fifoCount < packetSize);
-    if(MPUeady){
+    bool MPUready = !(!mpuInterrupt && fifoCount < packetSize);
+    if (MPUready) {
       // reset interrupt flag and get INT_STATUS byte
       mpuInterrupt = false;
       mpuIntStatus = mpu.getIntStatus();
@@ -180,9 +200,9 @@ void loop() {
       if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
         // reset so we can continue cleanly
         mpu.resetFIFO();
-        #ifdef SERIAL_ENABLE
+#ifdef SERIAL_ENABLE
         Serial.println(F("FIFO overflow!"));
-        #endif
+#endif
       }
       // otherwise, check for DMP data ready interrupt (this should happen frequently)
       else if (mpuIntStatus & 0x02) {
@@ -200,15 +220,17 @@ void loop() {
         mpu.dmpGetQuaternion(&q, fifoBuffer);
         mpu.dmpGetGravity(&gravity, &q);
         mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-        pitch = ypr[1]*180/M_PI;
+        pitch = ypr[1] * 180 / M_PI;
         //only compiles if SERIAL_LOGGING is defined above
-        #ifdef SERIAL_ENABLE
+#ifdef SERIAL_ENABLE
         Serial.print(pitch);
         Serial.print("\t");
         Serial.print(INITIAL_DESIRED_ANGLE);
         Serial.print("\t");
+        Serial.print(INITIAL_DESIRED_ANGLE - pitch);
+        Serial.print("\t");
         Serial.println(convertedTorque);
-        #endif
+#endif
         // blink LED to indicate activity
         blinkState = !blinkState;
         digitalWrite(LED_PIN, blinkState);
@@ -220,14 +242,22 @@ void loop() {
         //----------------------------------------------------------------------------
         //get torque from PID loop and constrain from zero to max
         torque = constrain(Control.UpdatePID(pitch), -MAX_TORQUE, MAX_TORQUE);
-        
+
         //----------------------------------------------------------------------------
         //    Set Output
         //----------------------------------------------------------------------------
         //maps torque because torque is set from 0 to 1023
         convertedTorque = map(torque, 0, MAX_TORQUE, 0, 1023);
-        Robot.SetSpeeds(convertedTorque,-convertedTorque);
+        Robot.SetSpeeds(convertedTorque, -convertedTorque);
+        /*
+          if (speedval <= 1023) {
+          speedval = speedval + 10;
+          }
+          else{
+          speedval = 0;}
 
+          Robot.SetSpeeds(speedval,-speedval);
+        */
       }
     }
   }
