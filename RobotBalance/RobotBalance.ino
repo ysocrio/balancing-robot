@@ -1,12 +1,22 @@
 /*
   Describe wiring layout here
+  -dynamixel configuration:
+  -MPU6050
+   Vin to 5v
+   gnd to gnd
+
 */
 
 /*
-   Note changed quaternian definitions in MPU6050_6Axis_MotionApps20 because MPU was not mounted in the represented orientation
+      TO DO
+      Change max torque
+      change torque limit
+      change delay time
+      check update rate of motors
+      set motors to zero on reset             v/
 */
 
-int speedval = 0;
+//fifo buffer speed is now set to 0x04 was 0x01 (in mpu6050_6Axis_MotionApps20.h)
 
 //------------------------------------------------------------------------------
 //         settings
@@ -14,7 +24,7 @@ int speedval = 0;
 #define INITIAL_P 100
 #define INITIAL_I 0
 #define INITIAL_D 0
-#define INITIAL_DESIRED_ANGLE 40
+#define INITIAL_DESIRED_ANGLE 0
 #define UPDATE_PERIOD 100
 #define SERIAL_ENABLE 1            //comment this out to disable serial
 
@@ -60,7 +70,7 @@ uint16_t fifoCount;     // count of all bytes currently in FIFO
 
 //arduino restarting due to not enough ram? this uses a quarter of ram, lets shrink this
 //potential solution: chang DMP output rate, then fifoBuffer size in arduino
-uint8_t fifoBuffer[1024]; // FIFO storage buffer
+uint8_t fifoBuffer[64]; // FIFO storage buffer64
 //containers for MPU6050
 Quaternion q;           // [w, x, y, z]         quaternion container
 VectorInt16 aa;         // [x, y, z]            accel sensor measurements
@@ -77,7 +87,7 @@ float pitch = INITIAL_DESIRED_ANGLE;
 int initialFrame[2][NUMBER_OF_SERVOS] =
 {
   {512, 512, 205, 818, 512, 512, 512, 512, 512, 512, 512, 808, 512, 512, 00, 00}, //angles
-  {1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 18 , 15, 16} //Servo ID Numbers
+  {1,  2,  3,  4,  5,  6,  7,  8,  9,  17, 11, 12, 13, 18 , 15, 16} //Servo ID Numbers
 };
 
 int torque = 0;
@@ -87,6 +97,9 @@ int convertedTorque = 0;
 //object definitions
 Balance Control(INITIAL_P, INITIAL_I, INITIAL_D, INITIAL_DESIRED_ANGLE);
 ServoGroup Robot(initialFrame);
+float p = 0;
+float i = 0;
+float d = 0;
 
 //called when MPU6050 triggers INTERRUPT_PIN
 void dmpDataReady()
@@ -95,12 +108,28 @@ void dmpDataReady()
 };
 
 void setup() {
-  Robot.ServosInitialize();
-
   //initialize sensor---------------------------------------------------------
   blinkState = false;
   dmpReady = false;
   //initial setup
+
+
+#ifdef SERIAL_ENABLE
+  Serial.begin(115200);
+  //Ask user for PID values
+  Serial.setTimeout(100000);
+  Serial.println("input P value:");
+  p = Serial.readStringUntil('\n').toDouble();
+  Serial.println(p);
+  Serial.println("input I value:");
+  i = Serial.readStringUntil('\n').toDouble();
+  Serial.println(i);
+  Serial.println("input D value:");
+  d = Serial.readStringUntil('\n').toDouble();
+  Serial.println(d);
+  //Serial.println(F("Initializing I2C devices..."));
+#endif
+  Control.SetPID(p, i, d);
   // join I2C bus (I2Cdev library doesn't do this automatically)
 #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
   Wire.begin();
@@ -108,26 +137,25 @@ void setup() {
 #elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
   Fastwire::setup(400, true);
 #endif
-#ifdef SERIAL_ENABLE
-  Serial.begin(115200);
-  Serial.println(F("Initializing I2C devices..."));
-#endif
   mpu.initialize();
   pinMode(INTERRUPT_PIN, INPUT);
   // verify connection
 #ifdef SERIAL_ENABLE
-  Serial.println(F("Testing device connections..."));
-  Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
+  //Serial.println(F("Testing device connections..."));
+  //Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
+  mpu.testConnection();
   // load and configure the DMP
-  Serial.println(F("Initializing DMP..."));
+  //Serial.println(F("Initializing DMP..."));
 #endif
   devStatus = mpu.dmpInitialize();
 
   // supply your own gyro offsets here, scaled for min sensitivity
-  mpu.setXGyroOffset(220);
-  mpu.setYGyroOffset(76);
-  mpu.setZGyroOffset(-85);
-  mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
+  mpu.setXGyroOffset(130);
+  mpu.setYGyroOffset(10);
+  mpu.setZGyroOffset(15);
+  mpu.setXAccelOffset(-2495); // 1688 factory default for my test chip
+  mpu.setYAccelOffset(-1524); // 1688 factory default for my test chip
+  mpu.setZAccelOffset(1410); // 1688 factory default for my test chip
 
   /*
     // supply your own gyro offsets here, scaled for min sensitivity
@@ -142,18 +170,18 @@ void setup() {
   if (devStatus == 0) {
     // turn on the DMP, now that it's ready
 #ifdef SERIAL_ENABLE
-    Serial.println(F("Enabling DMP..."));
+    //Serial.println(F("Enabling DMP..."));
 #endif
     mpu.setDMPEnabled(true);
     // enable Arduino interrupt detection
 #ifdef SERIAL_ENABLE
-    Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
+    //Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
 #endif
     attachInterrupt(INTERRUPT_PIN, dmpDataReady, RISING);
     mpuIntStatus = mpu.getIntStatus();
     // set our DMP Ready flag so the main loop() function knows it's okay to use it
 #ifdef SERIAL_ENABLE
-    Serial.println(F("DMP ready! Waiting for first interrupt..."));
+    //Serial.println(F("DMP ready! Waiting for first interrupt..."));
 #endif
     dmpReady = true;
     // get expected DMP packet size for later comparison
@@ -171,16 +199,15 @@ void setup() {
   }
   // configure LED for output
   pinMode(LED_PIN, OUTPUT);
-}
 
-//------------------------------------------------------------------------------
-// balancing starts here
-//--------------------------------------------------------------
+  Robot.ServosInitialize();
+  Robot.SetSpeeds(0, 0);
+
+}
 
 void loop() {
   //first set the robots frame
   Robot.SetAngles(initialFrame);
-
   //----------------------------------------------------------------------------
   //            Read Sensor data
   //----------------------------------------------------------------------------
@@ -221,43 +248,30 @@ void loop() {
         mpu.dmpGetGravity(&gravity, &q);
         mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
         pitch = ypr[1] * 180 / M_PI;
-        //only compiles if SERIAL_LOGGING is defined above
+        //only compiles if SERIAL_ENABLE is defined above
 #ifdef SERIAL_ENABLE
         Serial.print(pitch);
-        Serial.print("\t");
-        Serial.print(INITIAL_DESIRED_ANGLE);
-        Serial.print("\t");
-        Serial.print(INITIAL_DESIRED_ANGLE - pitch);
-        Serial.print("\t");
-        Serial.println(convertedTorque);
+        Serial.print(" ");
+        Serial.println(INITIAL_DESIRED_ANGLE);
+
 #endif
         // blink LED to indicate activity
         blinkState = !blinkState;
         digitalWrite(LED_PIN, blinkState);
 
+        //------------------------------------------------------------------------------
+        // balancing starts here
+        //--------------------------------------------------------------
 
 
-        //----------------------------------------------------------------------------
-        //    calculate PID
-        //----------------------------------------------------------------------------
+        //calculate PID
         //get torque from PID loop and constrain from zero to max
         torque = constrain(Control.UpdatePID(pitch), -MAX_TORQUE, MAX_TORQUE);
 
-        //----------------------------------------------------------------------------
-        //    Set Output
-        //----------------------------------------------------------------------------
+        //Set Output
         //maps torque because torque is set from 0 to 1023
         convertedTorque = map(torque, 0, MAX_TORQUE, 0, 1023);
-        Robot.SetSpeeds(convertedTorque, -convertedTorque);
-        /*
-          if (speedval <= 1023) {
-          speedval = speedval + 10;
-          }
-          else{
-          speedval = 0;}
-
-          Robot.SetSpeeds(speedval,-speedval);
-        */
+        Robot.SetSpeeds(-convertedTorque, convertedTorque); //first input works, second does not
       }
     }
   }
