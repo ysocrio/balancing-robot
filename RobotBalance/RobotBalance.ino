@@ -24,7 +24,7 @@
 #define INITIAL_P 100
 #define INITIAL_I 0
 #define INITIAL_D 0
-#define INITIAL_DESIRED_ANGLE 0
+#define INITIAL_DESIRED_ANGLE 1
 #define UPDATE_PERIOD 100
 #define SERIAL_ENABLE 1            //comment this out to disable serial
 
@@ -87,7 +87,8 @@ float pitch = INITIAL_DESIRED_ANGLE;
 int initialFrame[2][NUMBER_OF_SERVOS] =
 {
   {512, 512, 205, 818, 512, 512, 512, 512, 512, 512, 512, 808, 512, 512, 00, 00}, //angles
-  {1,  2,  3,  4,  5,  6,  7,  8,  9,  17, 11, 12, 13, 18 , 15, 16} //Servo ID Numbers
+  {3,  2,  1,  4,  5,  6,  7,  8,  9,  17, 11, 12, 13, 18 , 15, 16} //Servo ID Numbers
+  //one is not responding
 };
 
 int torque = 0;
@@ -100,6 +101,7 @@ ServoGroup Robot(initialFrame);
 float p = 0;
 float i = 0;
 float d = 0;
+float initialAngle = 0;
 
 //called when MPU6050 triggers INTERRUPT_PIN
 void dmpDataReady()
@@ -127,9 +129,13 @@ void setup() {
   Serial.println("input D value:");
   d = Serial.readStringUntil('\n').toDouble();
   Serial.println(d);
+  Serial.println("input Desired Angle value:");
+  initialAngle = Serial.readStringUntil('\n').toDouble();
+  Serial.println(initialAngle);
   //Serial.println(F("Initializing I2C devices..."));
 #endif
   Control.SetPID(p, i, d);
+  Control.SetDesiredVal(initialAngle);
   // join I2C bus (I2Cdev library doesn't do this automatically)
 #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
   Wire.begin();
@@ -199,15 +205,13 @@ void setup() {
   }
   // configure LED for output
   pinMode(LED_PIN, OUTPUT);
-
   Robot.ServosInitialize();
   Robot.SetSpeeds(0, 0);
-
+  //first set the robots frame
+  Robot.SetAngles(initialFrame);
 }
 
 void loop() {
-  //first set the robots frame
-  Robot.SetAngles(initialFrame);
   //----------------------------------------------------------------------------
   //            Read Sensor data
   //----------------------------------------------------------------------------
@@ -252,7 +256,7 @@ void loop() {
 #ifdef SERIAL_ENABLE
         Serial.print(pitch);
         Serial.print(" ");
-        Serial.println(INITIAL_DESIRED_ANGLE);
+        Serial.println(initialAngle);
 
 #endif
         // blink LED to indicate activity
