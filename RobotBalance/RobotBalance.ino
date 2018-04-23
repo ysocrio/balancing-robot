@@ -122,16 +122,12 @@ void setup() {
   Serial.setTimeout(100000);
   Serial.println("input P value:");
   p = Serial.readStringUntil('\n').toDouble();
-  Serial.println(p);
   Serial.println("input I value:");
   i = Serial.readStringUntil('\n').toDouble();
-  Serial.println(i);
   Serial.println("input D value:");
   d = Serial.readStringUntil('\n').toDouble();
-  Serial.println(d);
   Serial.println("input Desired Angle value:");
   initialAngle = Serial.readStringUntil('\n').toDouble();
-  Serial.println(initialAngle);
   //Serial.println(F("Initializing I2C devices..."));
 #endif
   Control.SetPID(p, i, d);
