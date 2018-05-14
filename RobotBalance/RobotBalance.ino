@@ -4,16 +4,6 @@
   -MPU6050
    Vin to 5v
    gnd to gnd
-
-*/
-
-/*
-      TO DO
-      Change max torque
-      change torque limit
-      change delay time
-      check update rate of motors
-      set motors to zero on reset             v/
 */
 
 //fifo buffer speed is now set to 0x04 was 0x01 (in mpu6050_6Axis_MotionApps20.h)
@@ -21,10 +11,11 @@
 //------------------------------------------------------------------------------
 //         settings
 //------------------------------------------------------------------------------
-#define INITIAL_P 100
+#define INITIAL_K 1
+#define INITIAL_P 0
 #define INITIAL_I 0
 #define INITIAL_D 0
-#define INITIAL_DESIRED_ANGLE 1
+#define INITIAL_DESIRED_ANGLE 3
 #define UPDATE_PERIOD 100
 #define SERIAL_ENABLE 1            //comment this out to disable serial
 
@@ -39,6 +30,10 @@
 #define X_ACCEL_OFFSET 1788
 #define Y_ACCEL_OFFSET 1788
 #define Z_ACCEL_OFFSET 1788
+
+//how long to wait befor begining
+#define MPU_SETTLING_TIME_DELAY 6000 //6 seconds
+
 //------------------------------------------------------------------------------
 
 #include <Balance.h>
@@ -81,7 +76,9 @@ VectorFloat gravity;    // [x, y, z]            gravity vector
 float euler[3];         // [psi, theta, phi]    Euler angle container
 float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
 float pitch = INITIAL_DESIRED_ANGLE;
-//until we read the sensor for the first time,  we assume it starts upright
+//decides when to start
+bool vertical = false;
+unsigned long startTime;
 
 //14 initial frame positions last two are ignored
 int initialFrame[2][NUMBER_OF_SERVOS] =
@@ -91,13 +88,14 @@ int initialFrame[2][NUMBER_OF_SERVOS] =
   //one is not responding
 };
 
-int torque = 0;
+double torque = 0;
 int convertedTorque = 0;
 
 
 //object definitions
-Balance Control(INITIAL_P, INITIAL_I, INITIAL_D, INITIAL_DESIRED_ANGLE);
+Balance Control(INITIAL_K, INITIAL_P, INITIAL_I, INITIAL_D, INITIAL_DESIRED_ANGLE);
 ServoGroup Robot(initialFrame);
+float k = 1;
 float p = 0;
 float i = 0;
 float d = 0;
@@ -110,16 +108,13 @@ void dmpDataReady()
 };
 
 void setup() {
-  //initialize sensor---------------------------------------------------------
-  blinkState = false;
-  dmpReady = false;
-  //initial setup
-
 
 #ifdef SERIAL_ENABLE
   Serial.begin(115200);
   //Ask user for PID values
   Serial.setTimeout(100000);
+  Serial.println("input K value:");
+  k = Serial.readStringUntil('\n').toDouble();
   Serial.println("input P value:");
   p = Serial.readStringUntil('\n').toDouble();
   Serial.println("input I value:");
@@ -129,10 +124,23 @@ void setup() {
   Serial.println("input Desired Angle value:");
   initialAngle = Serial.readStringUntil('\n').toDouble();
   //Serial.println(F("Initializing I2C devices..."));
-#endif
-  Control.SetPID(p, i, d);
+  Control.SetPID(k, p, i, d);
   Control.SetDesiredVal(initialAngle);
-  // join I2C bus (I2Cdev library doesn't do this automatically)
+#endif
+  //initialize robot----------------------------------------------------------
+  Robot.ServosInitialize();
+  Robot.SetSpeeds(0, 0);
+  //first set the robots frame
+  Robot.SetAnglesAll(initialFrame);
+
+  //initialize sensor---------------------------------------------------------
+  blinkState = false;
+  dmpReady = false;
+  //initial setup
+
+
+
+  // join I2C bus (I2Cdev library doesn't do this automatically)T
 #if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
   Wire.begin();
   Wire.setClock(400000); // 400kHz I2C clock. Comment this line if having compilation difficulties
@@ -145,13 +153,13 @@ void setup() {
 #ifdef SERIAL_ENABLE
   //Serial.println(F("Testing device connections..."));
   //Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
-  mpu.testConnection();
+  //mpu.testConnection();
   // load and configure the DMP
   //Serial.println(F("Initializing DMP..."));
 #endif
   devStatus = mpu.dmpInitialize();
 
-  // supply your own gyro offsets here, scaled for min sensitivity
+  // supply your own gyro offsets here
   mpu.setXGyroOffset(130);
   mpu.setYGyroOffset(10);
   mpu.setZGyroOffset(15);
@@ -159,15 +167,6 @@ void setup() {
   mpu.setYAccelOffset(-1524); // 1688 factory default for my test chip
   mpu.setZAccelOffset(1410); // 1688 factory default for my test chip
 
-  /*
-    // supply your own gyro offsets here, scaled for min sensitivity
-    mpu.setXGyroOffset(X_GYRO_OFFSET);
-    mpu.setYGyroOffset(Y_GYRO_OFFSET);
-    mpu.setZGyroOffset(Z_GYRO_OFFSET);
-    mpu.setXAccelOffset(X_ACCEL_OFFSET); // 1688 factory default for my test chip
-    mpu.setYAccelOffset(Y_ACCEL_OFFSET); // 1688 factory default for my test chip
-    mpu.setZAccelOffset(Z_ACCEL_OFFSET); // 1688 factory default for my test chip
-  */
   // make sure it worked (returns 0 if so)
   if (devStatus == 0) {
     // turn on the DMP, now that it's ready
@@ -201,13 +200,22 @@ void setup() {
   }
   // configure LED for output
   pinMode(LED_PIN, OUTPUT);
-  Robot.ServosInitialize();
-  Robot.SetSpeeds(0, 0);
-  //first set the robots frame
-  Robot.SetAngles(initialFrame);
-}
 
+  //only starts balancing a fixed time after this point
+  startTime = millis();
+}
 void loop() {
+  //check to see if controller is sending a desired arm angle or turnVal
+  float armAngle = 0;
+  float turnVal = 0;
+  if (Serial.available() > 0)
+  {
+    //sent data will be in the form "FLOAT1 FLOAT2\n"
+    //following lines will convert above string to floats
+    armAngle = Serial.parseFloat();
+    turnVal = Serial.parseFloat();
+  }
+
   //----------------------------------------------------------------------------
   //            Read Sensor data
   //----------------------------------------------------------------------------
@@ -248,6 +256,9 @@ void loop() {
         mpu.dmpGetGravity(&gravity, &q);
         mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
         pitch = ypr[1] * 180 / M_PI;
+
+
+
         //only compiles if SERIAL_ENABLE is defined above
 #ifdef SERIAL_ENABLE
         Serial.print(pitch);
@@ -262,16 +273,34 @@ void loop() {
         //------------------------------------------------------------------------------
         // balancing starts here
         //--------------------------------------------------------------
+        //
 
+        //only begins when robot is within one degree of vertical
+        if (millis() - startTime > MPU_SETTLING_TIME_DELAY)
+        {
+          if ((pitch - initialAngle > -.1) && (pitch - initialAngle < .1))
+          {
+            vertical = true;
+          }
+          if (vertical) {
+            //updateFrame with armAngle (to be added)
 
-        //calculate PID
-        //get torque from PID loop and constrain from zero to max
-        torque = constrain(Control.UpdatePID(pitch), -MAX_TORQUE, MAX_TORQUE);
+            //Set frame
+            Robot.SetAngles(initialFrame);
+            //calculate PID then get torque from PID loop and constrain from zero to max
+            noInterrupts();
+            torque = constrain(Control.UpdatePID(pitch), -MAX_TORQUE, MAX_TORQUE);
+            interrupts();
 
-        //Set Output
-        //maps torque because torque is set from 0 to 1023
-        convertedTorque = map(torque, 0, MAX_TORQUE, 0, 1023);
-        Robot.SetSpeeds(-convertedTorque, convertedTorque); //first input works, second does not
+            //Set Output
+            //maps torque because torque is set from 0 to 1023
+            convertedTorque = map(torque, 0, MAX_TORQUE, 0, 1023);
+            //apply turning info then set speed (to be added)
+            noInterrupts();
+            Robot.SetSpeeds(-convertedTorque, convertedTorque); //first input works, second does not
+            interrupts();
+          }
+        }
       }
     }
   }
