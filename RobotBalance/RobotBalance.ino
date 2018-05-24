@@ -210,10 +210,18 @@ void loop() {
   float turnVal = 0;
   if (Serial.available() > 0)
   {
-    //sent data will be in the form "FLOAT1 FLOAT2\n"
+    //sent data will be in the form "K P I D\n"
+    //all values are floats
     //following lines will convert above string to floats
+    float Knew = Serial.parseFloat();
+    float Pnew = Serial.parseFloat();
+    float Inew = Serial.parseFloat();
+    float Dnew = Serial.parseFloat();
+    Control.SetPIDLive(Knew,Pnew,Inew,Dnew);
+    /*
     armAngle = Serial.parseFloat();
     turnVal = Serial.parseFloat();
+    */
   }
 
   //----------------------------------------------------------------------------
